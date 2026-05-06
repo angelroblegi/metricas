@@ -1,0 +1,95 @@
+name: $(date:yyyyMMdd)$(rev:.r)
+variables:
+  solution: '$(Build.SourcesDirectory)/DeudaTecnicaSonar.sln'
+  coverageOutput: '$(Build.SourcesDirectory)/coverage.opencover.xml'
+  sonarProject: 'AEL.Metricas.Portal'
+
+jobs:
+- job: Job_1
+  displayName: Agent job 1
+  pool:
+    name: DEV
+  steps:
+  - checkout: self
+    clean: true 
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Restore NuGet Packages'
+    inputs:
+      command: 'restore'
+      projects: '$(solution)'
+      feedsToUse: 'select'
+
+  - task: SonarQubePrepare@8
+    displayName: Prepare analysis on SonarQube
+    enabled: true
+    inputs:
+      SonarQube: 'Sonar_ServiceConnection'
+      scannerMode: 'dotnet'
+      projectKey: 'Team_-_Blue_Team_Defenders_AEL.Metricas.Portal_2f5f3eaa-92fb-4dc5-a6f7-c1b016efbf2c'
+      projectName: 'AEL.Metricas.Portal'
+      projectVersion: '$(Build.BuildNumber)_$(Build.SourceBranchName)'
+      extraProperties: |
+        sonar.scm.exclusions.disabled=true
+        sonar.verbose=true
+        sonar.cs.opencover.reportsPaths=$(System.DefaultWorkingDirectory)/TestResults/coverage.opencover.xml
+        sonar.scanner.opts=-Xmx2048m
+        sonar.scm.provider=git
+        sonar.inclusions=**/*.cs
+        sonar.exclusions=**/Migrations/**,**/Migracion/**,**/Migraciones/**,**/obj/**,**/bin/**
+        sonar.cpd.cross_project=false
+
+  - task: DotNetCoreCLI@2
+    displayName: Build project
+    inputs:
+      command: 'build'
+      projects: '$(solution)'
+      arguments: '--configuration Release'
+
+  - task: PowerShell@2
+    inputs:
+      targetType: 'inline'
+      script: 'Remove-Item "$(System.DefaultWorkingDirectory)/TestResults*" -Recurse -Force'
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Ejecutar test con cobertura'
+    enabled: true
+    inputs:
+      command: 'test'
+      projects: '$(projectPath)/DeudaTecnicaSonar.Tests/DeudaTecnicaSonar.Tests.csproj'
+      arguments: '--configuration $(buildConfiguration) --collect:"XPlat Code Coverage;Format=opencover" --results-directory $(System.DefaultWorkingDirectory)/TestResults'
+      publishTestResults: false
+
+  - task: CopyFiles@2
+    displayName: 'Copy Files to TestResults'
+    enabled: true
+    inputs:
+      Contents: '**/coverage.opencover.xml'
+      TargetFolder: '$(System.DefaultWorkingDirectory)/TestResults/'
+      flattenFolders: true
+
+  - task: reportgenerator@5
+    displayName: 'ReportGenerator'
+    enabled: false
+    inputs:
+      reports: '$(Build.SourcesDirectory)/TestResults/coverage.opencover.xml'
+      targetdir: '$(Build.ArtifactStagingDirectory)/CodeCoverage'
+      publishCodeCoverageResults: true
+
+  - task: SonarQubeAnalyze@8
+    displayName: Run Code Analysis
+    inputs:
+      jdkversion: 'JAVA_HOME_21_X64'
+
+  - task: SonarQubePublish@8
+    displayName: Publish Quality Gate Result
+    inputs:
+      pollingTimeoutSec: '500'
+
+  - task: sonar-buildbreaker@8
+    displayName: Break build on quality gate failure
+    inputs:
+      SonarQube: 'Sonar_ServiceConnection'
+
+  - task: PostBuildCleanup@3
+    displayName: Clean Agent Directories
